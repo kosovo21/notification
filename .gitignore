@@ -28,5 +28,14 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+
+# Build output
+bin/
+
+# Air hot-reload
+tmp/
+
+# Local config (use config.yaml.example)
+config.yaml
