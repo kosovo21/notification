@@ -1,0 +1,280 @@
+package handler
+
+import (
+	"math"
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
+
+	"notification-system/internal/middleware"
+	"notification-system/internal/model"
+	"notification-system/internal/repository"
+	"notification-system/pkg/logger"
+)
+
+// MessageHandler handles HTTP requests for messages.
+type MessageHandler struct {
+	db            *sqlx.DB
+	messageRepo   repository.MessageRepository
+	recipientRepo repository.RecipientRepository
+}
+
+// NewMessageHandler creates a new MessageHandler.
+func NewMessageHandler(db *sqlx.DB, messageRepo repository.MessageRepository, recipientRepo repository.RecipientRepository) *MessageHandler {
+	return &MessageHandler{
+		db:            db,
+		messageRepo:   messageRepo,
+		recipientRepo: recipientRepo,
+	}
+}
+
+// SendMessage handles POST /api/v1/messages/send
+func (h *MessageHandler) SendMessage(c *gin.Context) {
+	var req model.CreateMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Success: false,
+			Error: model.ErrorDetail{
+				Code:    "VALIDATION_ERROR",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	user := middleware.GetUserFromContext(c)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "UNAUTHORIZED", Message: "User not found in context"},
+		})
+		return
+	}
+
+	now := time.Now()
+	msgID := uuid.New()
+
+	// Determine priority (default to normal)
+	priority := model.PriorityNormal
+	if req.Priority != nil {
+		priority = model.Priority(*req.Priority)
+	}
+
+	// Determine initial status
+	status := model.StatusQueued
+	if req.ScheduledAt != nil && req.ScheduledAt.After(now) {
+		status = model.StatusQueued // will be picked up by scheduler
+	}
+
+	msg := &model.Message{
+		ID:          msgID,
+		UserID:      user.ID,
+		Subject:     req.Subject,
+		Body:        req.Message,
+		Sender:      req.From,
+		Platform:    model.Platform(req.Platform),
+		Priority:    priority,
+		Status:      status,
+		ScheduledAt: req.ScheduledAt,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	// Build recipients
+	recipients := make([]model.Recipient, len(req.To))
+	for i, to := range req.To {
+		recipients[i] = model.Recipient{
+			ID:         uuid.New(),
+			MessageID:  msgID,
+			Recipient:  to,
+			Status:     model.StatusQueued,
+			RetryCount: 0,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+	}
+
+	// Transactional insert: message + recipients
+	tx, err := h.db.Beginx()
+	if err != nil {
+		logger.Get().Error().Err(err).Msg("failed to begin transaction")
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to process request"},
+		})
+		return
+	}
+
+	if err := h.messageRepo.Create(c.Request.Context(), tx, msg); err != nil {
+		tx.Rollback()
+		logger.Get().Error().Err(err).Msg("failed to create message")
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to create message"},
+		})
+		return
+	}
+
+	if err := h.recipientRepo.BatchCreate(c.Request.Context(), tx, recipients); err != nil {
+		tx.Rollback()
+		logger.Get().Error().Err(err).Msg("failed to create recipients")
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to create recipients"},
+		})
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		logger.Get().Error().Err(err).Msg("failed to commit transaction")
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to save message"},
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, model.SendMessageResponse{
+		Success:           true,
+		MessageID:         msgID.String(),
+		RecipientsCount:   len(recipients),
+		EstimatedDelivery: now.Add(30 * time.Second),
+		RequestID:         uuid.New().String(),
+	})
+}
+
+// GetMessageStatus handles GET /api/v1/messages/:id
+func (h *MessageHandler) GetMessageStatus(c *gin.Context) {
+	idStr := c.Param("id")
+	msgID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "VALIDATION_ERROR", Message: "Invalid message ID format"},
+		})
+		return
+	}
+
+	msg, err := h.messageRepo.GetByID(c.Request.Context(), msgID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, model.ErrorResponse{
+				Success: false,
+				Error:   model.ErrorDetail{Code: "NOT_FOUND", Message: "Message not found"},
+			})
+			return
+		}
+		logger.Get().Error().Err(err).Msg("failed to get message")
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to get message"},
+		})
+		return
+	}
+
+	recipients, err := h.recipientRepo.GetByMessageID(c.Request.Context(), msgID)
+	if err != nil {
+		logger.Get().Error().Err(err).Msg("failed to get recipients")
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to get recipients"},
+		})
+		return
+	}
+
+	// Build summary
+	var summary model.DeliverySummary
+	recipientStatuses := make([]model.RecipientStatus, len(recipients))
+	for i, r := range recipients {
+		switch r.Status {
+		case model.StatusQueued:
+			summary.Queued++
+		case model.StatusProcessing:
+			summary.Processing++
+		case model.StatusSent:
+			summary.Sent++
+		case model.StatusDelivered:
+			summary.Delivered++
+		case model.StatusFailed:
+			summary.Failed++
+		case model.StatusPending:
+			summary.Pending++
+		}
+
+		recipientStatuses[i] = model.RecipientStatus{
+			Recipient:   r.Recipient,
+			Status:      int(r.Status),
+			SentAt:      r.SentAt,
+			DeliveredAt: r.DeliveredAt,
+		}
+	}
+
+	c.JSON(http.StatusOK, model.MessageStatusResponse{
+		Success:   true,
+		MessageID: msg.ID.String(),
+		Status: model.MessageStatusDetail{
+			MessageID:       msg.ID.String(),
+			Subject:         msg.Subject,
+			Platform:        string(msg.Platform),
+			TotalRecipients: len(recipients),
+			Summary:         summary,
+			Recipients:      recipientStatuses,
+			CreatedAt:       msg.CreatedAt,
+		},
+	})
+}
+
+// ListMessages handles GET /api/v1/messages
+func (h *MessageHandler) ListMessages(c *gin.Context) {
+	var query model.ListMessagesQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "VALIDATION_ERROR", Message: err.Error()},
+		})
+		return
+	}
+
+	// Defaults
+	if query.Page == 0 {
+		query.Page = 1
+	}
+	if query.Limit == 0 {
+		query.Limit = 20
+	}
+
+	user := middleware.GetUserFromContext(c)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "UNAUTHORIZED", Message: "User not found in context"},
+		})
+		return
+	}
+
+	messages, total, err := h.messageRepo.List(c.Request.Context(), user.ID, query)
+	if err != nil {
+		logger.Get().Error().Err(err).Msg("failed to list messages")
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to list messages"},
+		})
+		return
+	}
+
+	totalPages := int(math.Ceil(float64(total) / float64(query.Limit)))
+
+	c.JSON(http.StatusOK, model.ListMessagesResponse{
+		Success:  true,
+		Messages: messages,
+		Pagination: model.Pagination{
+			Page:       query.Page,
+			Limit:      query.Limit,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+	})
+}
