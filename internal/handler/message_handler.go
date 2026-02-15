@@ -3,7 +3,6 @@ package handler
 import (
 	"math"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -12,6 +11,7 @@ import (
 	"notification-system/internal/middleware"
 	"notification-system/internal/model"
 	"notification-system/internal/repository"
+	"notification-system/internal/service"
 	"notification-system/pkg/logger"
 )
 
@@ -20,14 +20,21 @@ type MessageHandler struct {
 	db            *sqlx.DB
 	messageRepo   repository.MessageRepository
 	recipientRepo repository.RecipientRepository
+	service       *service.MessageService
 }
 
 // NewMessageHandler creates a new MessageHandler.
-func NewMessageHandler(db *sqlx.DB, messageRepo repository.MessageRepository, recipientRepo repository.RecipientRepository) *MessageHandler {
+func NewMessageHandler(
+	db *sqlx.DB,
+	messageRepo repository.MessageRepository,
+	recipientRepo repository.RecipientRepository,
+	service *service.MessageService,
+) *MessageHandler {
 	return &MessageHandler{
 		db:            db,
 		messageRepo:   messageRepo,
 		recipientRepo: recipientRepo,
+		service:       service,
 	}
 }
 
@@ -54,53 +61,9 @@ func (h *MessageHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	now := time.Now()
-	msgID := uuid.New()
-
-	// Determine priority (default to normal)
-	priority := model.PriorityNormal
-	if req.Priority != nil {
-		priority = model.Priority(*req.Priority)
-	}
-
-	// Determine initial status
-	status := model.StatusQueued
-	if req.ScheduledAt != nil && req.ScheduledAt.After(now) {
-		status = model.StatusQueued // will be picked up by scheduler
-	}
-
-	msg := &model.Message{
-		ID:          msgID,
-		UserID:      user.ID,
-		Subject:     req.Subject,
-		Body:        req.Message,
-		Sender:      req.From,
-		Platform:    model.Platform(req.Platform),
-		Priority:    priority,
-		Status:      status,
-		ScheduledAt: req.ScheduledAt,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-
-	// Build recipients
-	recipients := make([]model.Recipient, len(req.To))
-	for i, to := range req.To {
-		recipients[i] = model.Recipient{
-			ID:         uuid.New(),
-			MessageID:  msgID,
-			Recipient:  to,
-			Status:     model.StatusQueued,
-			RetryCount: 0,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-	}
-
-	// Transactional insert: message + recipients
-	tx, err := h.db.Beginx()
+	resp, err := h.service.SendMessage(c.Request.Context(), user.ID, req)
 	if err != nil {
-		logger.Get().Error().Err(err).Msg("failed to begin transaction")
+		logger.Get().Error().Err(err).Msg("failed to process message request")
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Success: false,
 			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to process request"},
@@ -108,42 +71,7 @@ func (h *MessageHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	if err := h.messageRepo.Create(c.Request.Context(), tx, msg); err != nil {
-		tx.Rollback()
-		logger.Get().Error().Err(err).Msg("failed to create message")
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
-			Success: false,
-			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to create message"},
-		})
-		return
-	}
-
-	if err := h.recipientRepo.BatchCreate(c.Request.Context(), tx, recipients); err != nil {
-		tx.Rollback()
-		logger.Get().Error().Err(err).Msg("failed to create recipients")
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
-			Success: false,
-			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to create recipients"},
-		})
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		logger.Get().Error().Err(err).Msg("failed to commit transaction")
-		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
-			Success: false,
-			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to save message"},
-		})
-		return
-	}
-
-	c.JSON(http.StatusCreated, model.SendMessageResponse{
-		Success:           true,
-		MessageID:         msgID.String(),
-		RecipientsCount:   len(recipients),
-		EstimatedDelivery: now.Add(30 * time.Second),
-		RequestID:         uuid.New().String(),
-	})
+	c.JSON(http.StatusCreated, resp)
 }
 
 // GetMessageStatus handles GET /api/v1/messages/:id

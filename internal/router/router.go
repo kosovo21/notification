@@ -10,7 +10,9 @@ import (
 	"notification-system/internal/config"
 	"notification-system/internal/handler"
 	"notification-system/internal/middleware"
+	"notification-system/internal/queue"
 	"notification-system/internal/repository"
+	"notification-system/internal/service"
 )
 
 // Deps holds dependencies required by the router.
@@ -21,6 +23,7 @@ type Deps struct {
 	RecipientRepo repository.RecipientRepository
 	RedisClient   *redis.Client
 	RateLimit     config.RateLimitConfig
+	Publisher     *queue.Publisher
 }
 
 // NewRouter creates and configures the Gin engine with middleware and routes.
@@ -44,8 +47,11 @@ func NewRouter(deps Deps) *gin.Engine {
 	v1.Use(middleware.AuthMiddleware(deps.UserRepo))
 	v1.Use(middleware.RateLimitMiddleware(deps.RedisClient, deps.RateLimit))
 
+	// Services
+	msgService := service.NewMessageService(deps.DB, deps.MessageRepo, deps.RecipientRepo, deps.Publisher)
+
 	// Message routes
-	msgHandler := handler.NewMessageHandler(deps.DB, deps.MessageRepo, deps.RecipientRepo)
+	msgHandler := handler.NewMessageHandler(deps.DB, deps.MessageRepo, deps.RecipientRepo, msgService)
 	messages := v1.Group("/messages")
 	{
 		messages.POST("/send", msgHandler.SendMessage)

@@ -11,6 +11,8 @@ import (
 
 	"notification-system/internal/cache"
 	"notification-system/internal/config"
+	"notification-system/internal/queue"
+
 	"notification-system/internal/repository"
 	"notification-system/internal/router"
 	"notification-system/pkg/logger"
@@ -46,6 +48,22 @@ func main() {
 	defer rdb.Close()
 	log.Info().Msg("connected to redis")
 
+	// Connect to RabbitMQ
+	rmq, err := queue.NewRabbitMQ(cfg.RabbitMQ.URL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to rabbitmq")
+	}
+	defer rmq.Close()
+	log.Info().Msg("connected to rabbitmq")
+
+	// Initialize publisher
+	publisher := queue.NewPublisher(rmq)
+
+	// Ensure exchange exists
+	if err := rmq.DeclareExchange(queue.ExchangeName); err != nil {
+		log.Fatal().Err(err).Msg("failed to declare exchange")
+	}
+
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(db)
 	messageRepo := repository.NewMessageRepository(db)
@@ -59,6 +77,7 @@ func main() {
 		RecipientRepo: recipientRepo,
 		RedisClient:   rdb,
 		RateLimit:     cfg.RateLimit,
+		Publisher:     publisher,
 	})
 
 	// Create HTTP server
