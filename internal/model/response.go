@@ -74,3 +74,20 @@ type ErrorDetail struct {
 	Message string            `json:"message"`
 	Fields  map[string]string `json:"fields,omitempty"`
 }
+
+// BulkMessageResponse is returned after a bulk send operation.
+type BulkMessageResponse struct {
+	Success    bool                `json:"success"`
+	Total      int                 `json:"total"`
+	Successful int                 `json:"successful"`
+	Failed     int                 `json:"failed"`
+	Results    []BulkMessageResult `json:"results"`
+}
+
+// BulkMessageResult is the per-message result in a bulk send response.
+type BulkMessageResult struct {
+	Index     int    `json:"index"`
+	Success   bool   `json:"success"`
+	MessageID string `json:"message_id,omitempty"`
+	Error     string `json:"error,omitempty"`
+}

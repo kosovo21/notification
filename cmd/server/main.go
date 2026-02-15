@@ -15,6 +15,8 @@ import (
 
 	"notification-system/internal/repository"
 	"notification-system/internal/router"
+	"notification-system/internal/scheduler"
+	"notification-system/internal/service"
 	"notification-system/pkg/logger"
 )
 
@@ -69,6 +71,9 @@ func main() {
 	messageRepo := repository.NewMessageRepository(db)
 	recipientRepo := repository.NewRecipientRepository(db)
 
+	// Initialize message service (for scheduler)
+	msgService := service.NewMessageService(db, messageRepo, recipientRepo, publisher)
+
 	// Build router
 	r := router.NewRouter(router.Deps{
 		DB:            db,
@@ -79,6 +84,12 @@ func main() {
 		RateLimit:     cfg.RateLimit,
 		Publisher:     publisher,
 	})
+
+	// Start scheduler
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	defer schedCancel()
+	sched := scheduler.NewScheduler(messageRepo, msgService, 10*time.Second, 50)
+	go sched.Start(schedCtx)
 
 	// Create HTTP server
 	srv := &http.Server{

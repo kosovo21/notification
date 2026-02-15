@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +17,7 @@ type RecipientRepository interface {
 	BatchCreate(ctx context.Context, tx *sqlx.Tx, recipients []model.Recipient) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.MessageStatus, providerID *string) error
 	GetByMessageID(ctx context.Context, messageID uuid.UUID) ([]model.Recipient, error)
+	GetByProviderID(ctx context.Context, providerID string) (*model.Recipient, error)
 }
 
 type recipientRepository struct {
@@ -77,6 +80,22 @@ func (r *recipientRepository) GetByMessageID(ctx context.Context, messageID uuid
 	}
 
 	return recipients, nil
+}
+
+func (r *recipientRepository) GetByProviderID(ctx context.Context, providerID string) (*model.Recipient, error) {
+	var recipient model.Recipient
+	query := `SELECT id, message_id, recipient, status, provider_id, error_message, retry_count,
+	                  sent_at, delivered_at, created_at, updated_at
+	           FROM message_recipients WHERE provider_id = $1`
+
+	if err := r.db.GetContext(ctx, &recipient, query, providerID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	return &recipient, nil
 }
 
 // checkRowsAffected returns ErrNotFound if no rows were updated.

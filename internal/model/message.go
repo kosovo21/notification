@@ -17,6 +17,7 @@ const (
 	StatusFailed     MessageStatus = 4
 	StatusPending    MessageStatus = 5 // will retry
 	StatusCancelled  MessageStatus = 6
+	StatusScheduled  MessageStatus = 7
 )
 
 // String returns the human-readable name of the status.
@@ -36,6 +37,8 @@ func (s MessageStatus) String() string {
 		return "pending"
 	case StatusCancelled:
 		return "cancelled"
+	case StatusScheduled:
+		return "scheduled"
 	default:
 		return "unknown"
 	}

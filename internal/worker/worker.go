@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"notification-system/internal/adapter"
+	"notification-system/internal/metrics"
 	"notification-system/internal/model"
 	"notification-system/internal/queue"
 	"notification-system/internal/repository"
@@ -91,6 +92,7 @@ func (w *Worker) processMessage(ctx context.Context, body []byte) error {
 			Msg("failed to send notification")
 
 		w.recipientRepo.UpdateStatus(ctx, recipientID, model.StatusFailed, nil)
+		metrics.MessagesProcessedTotal.WithLabelValues(event.Platform, "failure").Inc()
 		return fmt.Errorf("send failed: %w", err)
 	}
 
@@ -99,6 +101,8 @@ func (w *Worker) processMessage(ctx context.Context, body []byte) error {
 		log.Error().Err(err).Str("recipient_id", event.RecipientID).Msg("failed to update recipient status to sent")
 		return fmt.Errorf("status update error: %w", err)
 	}
+
+	metrics.MessagesProcessedTotal.WithLabelValues(event.Platform, "success").Inc()
 
 	log.Info().
 		Str("message_id", event.MessageID).

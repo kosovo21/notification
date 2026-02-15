@@ -206,3 +206,114 @@ func (h *MessageHandler) ListMessages(c *gin.Context) {
 		},
 	})
 }
+
+// BulkSend handles POST /api/v1/messages/bulk
+func (h *MessageHandler) BulkSend(c *gin.Context) {
+	var req model.BulkMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "VALIDATION_ERROR", Message: err.Error()},
+		})
+		return
+	}
+
+	user := middleware.GetUserFromContext(c)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "UNAUTHORIZED", Message: "User not found in context"},
+		})
+		return
+	}
+
+	var results []model.BulkMessageResult
+	for i, msg := range req.Messages {
+		resp, err := h.service.SendMessage(c.Request.Context(), user.ID, msg)
+		if err != nil {
+			logger.Get().Error().Err(err).Int("index", i).Msg("bulk: failed to send message")
+			results = append(results, model.BulkMessageResult{
+				Index:   i,
+				Success: false,
+				Error:   err.Error(),
+			})
+			continue
+		}
+		results = append(results, model.BulkMessageResult{
+			Index:     i,
+			Success:   true,
+			MessageID: resp.MessageID,
+		})
+	}
+
+	c.JSON(http.StatusCreated, model.BulkMessageResponse{
+		Success:    true,
+		Total:      len(req.Messages),
+		Successful: countSuccessful(results),
+		Failed:     len(req.Messages) - countSuccessful(results),
+		Results:    results,
+	})
+}
+
+// CancelMessage handles DELETE /api/v1/messages/:id
+func (h *MessageHandler) CancelMessage(c *gin.Context) {
+	idStr := c.Param("id")
+	msgID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "VALIDATION_ERROR", Message: "Invalid message ID format"},
+		})
+		return
+	}
+
+	msg, err := h.messageRepo.GetByID(c.Request.Context(), msgID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			c.JSON(http.StatusNotFound, model.ErrorResponse{
+				Success: false,
+				Error:   model.ErrorDetail{Code: "NOT_FOUND", Message: "Message not found"},
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to get message"},
+		})
+		return
+	}
+
+	// Only scheduled messages can be cancelled
+	if msg.Status != model.StatusScheduled {
+		c.JSON(http.StatusConflict, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INVALID_STATE", Message: "Only scheduled messages can be cancelled"},
+		})
+		return
+	}
+
+	if err := h.messageRepo.UpdateStatus(c.Request.Context(), msgID, model.StatusCancelled); err != nil {
+		logger.Get().Error().Err(err).Msg("failed to cancel message")
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Success: false,
+			Error:   model.ErrorDetail{Code: "INTERNAL_ERROR", Message: "Failed to cancel message"},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":    true,
+		"message_id": msgID.String(),
+		"status":     "cancelled",
+	})
+}
+
+func countSuccessful(results []model.BulkMessageResult) int {
+	count := 0
+	for _, r := range results {
+		if r.Success {
+			count++
+		}
+	}
+	return count
+}

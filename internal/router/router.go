@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"notification-system/internal/config"
@@ -35,12 +36,16 @@ func NewRouter(deps Deps) *gin.Engine {
 	// Global middleware
 	r.Use(middleware.Recovery())
 	r.Use(middleware.Logger())
+	r.Use(middleware.Metrics())
 	r.Use(middleware.CORS())
 
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	// Prometheus metrics endpoint
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// API v1 route group — protected by auth + rate limiting
 	v1 := r.Group("/api/v1")
@@ -55,8 +60,18 @@ func NewRouter(deps Deps) *gin.Engine {
 	messages := v1.Group("/messages")
 	{
 		messages.POST("/send", msgHandler.SendMessage)
+		messages.POST("/bulk", msgHandler.BulkSend)
 		messages.GET("/:id", msgHandler.GetMessageStatus)
 		messages.GET("", msgHandler.ListMessages)
+		messages.DELETE("/:id", msgHandler.CancelMessage)
+	}
+
+	// Webhook routes — unauthenticated (providers POST callbacks here)
+	webhookHandler := handler.NewWebhookHandler(deps.RecipientRepo)
+	webhooks := r.Group("/webhooks")
+	{
+		webhooks.POST("/twilio", webhookHandler.TwilioWebhook)
+		webhooks.POST("/sendgrid", webhookHandler.SendGridWebhook)
 	}
 
 	return r

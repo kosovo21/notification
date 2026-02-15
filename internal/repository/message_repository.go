@@ -20,6 +20,7 @@ type MessageRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Message, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.MessageStatus) error
 	List(ctx context.Context, userID uuid.UUID, q model.ListMessagesQuery) ([]model.Message, int, error)
+	GetScheduledMessages(ctx context.Context, before time.Time, limit int) ([]model.Message, error)
 }
 
 type messageRepository struct {
@@ -132,4 +133,19 @@ func (r *messageRepository) List(ctx context.Context, userID uuid.UUID, q model.
 	}
 
 	return messages, total, nil
+}
+
+func (r *messageRepository) GetScheduledMessages(ctx context.Context, before time.Time, limit int) ([]model.Message, error) {
+	query := `SELECT id, user_id, subject, body, sender, platform, priority, status, scheduled_at, created_at, updated_at
+	           FROM messages
+	           WHERE status = $1 AND scheduled_at <= $2
+	           ORDER BY scheduled_at ASC
+	           LIMIT $3`
+
+	var messages []model.Message
+	if err := r.db.SelectContext(ctx, &messages, query, model.StatusScheduled, before, limit); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
 }
