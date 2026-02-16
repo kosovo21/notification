@@ -2,7 +2,7 @@
 
 A high-performance, scalable notification system that sends messages across multiple platforms (SMS, WhatsApp, Telegram, Email) through a unified API interface.
 
-![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
+![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-85%25-brightgreen)
@@ -234,231 +234,42 @@ Production: https://api.yourdomain.com/api/v1
 Development: http://localhost:8080/api/v1
 ```
 
-### Endpoints
+### Swagger UI (Interactive Docs)
 
-#### Send Message
+Full interactive API documentation is available via Swagger UI once the server is running:
 
-Send a single message to one or more recipients.
+| Resource | URL |
+|----------|-----|
+| **Swagger UI** | [http://localhost:8080/swagger/index.html](http://localhost:8080/swagger/index.html) |
+| **OpenAPI Spec (YAML)** | [http://localhost:8080/docs/swagger.yaml](http://localhost:8080/docs/swagger.yaml) |
 
-**Request:**
-```http
-POST /api/v1/messages/send
-Content-Type: application/json
-X-API-Key: your-api-key
+The Swagger UI lets you explore all endpoints, view request/response schemas, and try out API calls directly from the browser.
 
-{
-  "subject": "Welcome to Our Service",
-  "message": "Hello John, thanks for signing up!",
-  "from": "YourApp",
-  "to": ["+1234567890", "+0987654321"],
-  "platform": "sms",
-  "priority": 1
-}
-```
+### Endpoints Overview
 
-**Response:**
-```json
-{
-  "success": true,
-  "message_id": "7289c6c3-3bba-40b0-b991-c4a8df51c495",
-  "recipients_count": 2,
-  "estimated_delivery": "2024-01-20T10:25:30Z",
-  "request_id": "req_abc123"
-}
-```
-
-**Parameters:**
-- `subject` (string, required): Message subject/title (max 200 chars)
-- `message` (string, required): Message body (max 5000 chars)
-- `from` (string, required): Sender identifier (max 100 chars)
-- `to` (array, required): List of recipients (1-1000)
-- `platform` (string, required): `sms`, `whatsapp`, `telegram`, or `email`
-- `priority` (int, optional): 0=low, 1=normal (default), 2=high
-
-#### Get Message Status
-
-Retrieve the delivery status of a message.
-
-**Request:**
-```http
-GET /api/v1/messages/{message_id}
-X-API-Key: your-api-key
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message_id": "7289c6c3-3bba-40b0-b991-c4a8df51c495",
-  "status": {
-    "message_id": "7289c6c3-3bba-40b0-b991-c4a8df51c495",
-    "subject": "Welcome to Our Service",
-    "platform": "sms",
-    "total_recipients": 2,
-    "summary": {
-      "queued": 0,
-      "processing": 0,
-      "sent": 1,
-      "delivered": 1,
-      "failed": 0,
-      "pending": 0
-    },
-    "recipients": [
-      {
-        "recipient": "+1234****90",
-        "status": 3,
-        "delivered_at": "2024-01-20T10:25:45Z"
-      },
-      {
-        "recipient": "+0987****21",
-        "status": 2,
-        "sent_at": "2024-01-20T10:25:30Z"
-      }
-    ],
-    "created_at": "2024-01-20T10:25:00Z"
-  }
-}
-```
-
-**Status Codes:**
-- `0` - Queued
-- `1` - Processing
-- `2` - Sent
-- `3` - Delivered
-- `4` - Failed
-- `5` - Pending (will retry)
-- `6` - Cancelled
-
-#### List Messages
-
-Get paginated list of messages with filters.
-
-**Request:**
-```http
-GET /api/v1/messages?page=1&limit=20&platform=sms&status=3
-X-API-Key: your-api-key
-```
-
-**Query Parameters:**
-- `page` (int): Page number (default: 1)
-- `limit` (int): Items per page (max: 100, default: 20)
-- `platform` (string): Filter by platform
-- `status` (int): Filter by status
-- `from` (timestamp): Filter from date
-- `to` (timestamp): Filter to date
-
-**Response:**
-```json
-{
-  "success": true,
-  "messages": [...],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 150,
-    "total_pages": 8
-  }
-}
-```
-
-#### Send Bulk Messages
-
-Send multiple different messages in one request.
-
-**Request:**
-```http
-POST /api/v1/messages/send/bulk
-X-API-Key: your-api-key
-
-{
-  "messages": [
-    {
-      "subject": "Order Confirmation",
-      "message": "Your order #123 has been confirmed",
-      "from": "Shop",
-      "to": ["+1234567890"],
-      "platform": "sms"
-    },
-    {
-      "subject": "Welcome Email",
-      "message": "Welcome to our platform!",
-      "from": "support@example.com",
-      "to": ["user@email.com"],
-      "platform": "email"
-    }
-  ]
-}
-```
-
-#### Retry Failed Message
-
-Retry sending a failed message.
-
-**Request:**
-```http
-POST /api/v1/messages/{message_id}/retry
-X-API-Key: your-api-key
-```
-
-#### Cancel Scheduled Message
-
-Cancel a scheduled message before it's sent.
-
-**Request:**
-```http
-DELETE /api/v1/messages/{message_id}
-X-API-Key: your-api-key
-```
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| `GET` | `/health` | Health check | No |
+| `GET` | `/version` | Build version info | No |
+| `GET` | `/metrics` | Prometheus metrics | No |
+| `POST` | `/api/v1/messages/send` | Send a message | ✅ |
+| `POST` | `/api/v1/messages/bulk` | Bulk send messages | ✅ |
+| `GET` | `/api/v1/messages/{id}` | Get message status | ✅ |
+| `GET` | `/api/v1/messages` | List messages (paginated) | ✅ |
+| `DELETE` | `/api/v1/messages/{id}` | Cancel a scheduled message | ✅ |
+| `POST` | `/webhooks/twilio` | Twilio status callback | No |
+| `POST` | `/webhooks/sendgrid` | SendGrid event callback | No |
 
 ### Rate Limits
 
 Rate limits are applied per API key based on tier:
 
-| Tier | Requests/Minute | Burst |
-|------|----------------|-------|
-| Free | 60 | 10 |
-| Basic | 300 | 50 |
-| Premium | 1,000 | 100 |
-| Enterprise | 10,000 | 500 |
-
-**Rate Limit Headers:**
-```
-X-RateLimit-Limit: 300
-X-RateLimit-Remaining: 245
-X-RateLimit-Reset: 1674234567
-```
-
-### Error Responses
-
-All errors follow this format:
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Invalid request parameters",
-    "fields": {
-      "platform": "must be one of: sms, whatsapp, telegram, email"
-    }
-  }
-}
-```
-
-**Common Error Codes:**
-- `UNAUTHORIZED` - Invalid or missing API key
-- `RATE_LIMIT_EXCEEDED` - Too many requests
-- `VALIDATION_ERROR` - Invalid request data
-- `NOT_FOUND` - Message not found
-- `PLATFORM_NOT_ALLOWED` - Platform not enabled for account
-- `INTERNAL_ERROR` - Server error
-
-### Swagger Documentation
-
-Interactive API documentation available at:
-```
-http://localhost:8080/swagger/index.html
-```
+| Tier | Requests/Minute |
+|------|----------------|
+| Free | 60 |
+| Basic | 300 |
+| Premium | 1,000 |
+| Enterprise | 10,000 |
 
 ## ⚙️ Configuration
 
@@ -546,25 +357,28 @@ notification-system/
 │   ├── migrate/         # Database migration tool
 │   └── seed/            # Database seeder
 ├── internal/
-│   ├── config/          # Configuration management
-│   ├── middleware/      # HTTP middleware
-│   ├── handler/         # HTTP handlers
-│   ├── service/         # Business logic
-│   ├── repository/      # Database access
-│   ├── model/           # Data models
-│   ├── queue/           # RabbitMQ publisher/consumer
+│   ├── adapter/         # Platform adapters (Twilio, SendGrid)
+│   ├── auth/            # API key hashing & validation
 │   ├── cache/           # Redis cache
-│   ├── auth/            # Authentication
-│   ├── adapter/         # Platform adapters
-│   ├── worker/          # Worker logic
-│   └── router/          # Route definitions
+│   ├── config/          # Configuration management
+│   ├── handler/         # HTTP handlers
+│   ├── metrics/         # Prometheus metric definitions
+│   ├── middleware/      # Auth, rate limit, CORS, logging, metrics
+│   ├── model/           # Data models & request/response types
+│   ├── queue/           # RabbitMQ publisher/consumer
+│   ├── repository/      # Database access layer
+│   ├── router/          # Route definitions & Swagger UI
+│   ├── scheduler/       # Scheduled message polling
+│   ├── service/         # Business logic
+│   └── worker/          # Worker logic
 ├── pkg/
-│   ├── logger/          # Logging utilities
-│   ├── validator/       # Custom validators
-│   └── errors/          # Error definitions
-├── migrations/          # SQL migrations
-├── docker/              # Docker files
-├── docs/                # Documentation
+│   └── logger/          # Logging utilities
+├── docs/
+│   ├── swagger.yaml     # OpenAPI 3.0 specification
+│   └── docs.go          # Embed file for swagger.yaml
+├── migrations/          # SQL migration files
+├── docker/              # Dockerfiles (API & Worker)
+├── k8s/                 # Kubernetes manifests
 ├── scripts/             # Utility scripts
 ├── .env.example
 ├── config.yaml
@@ -672,15 +486,65 @@ Expected performance:
 - **Latency**: p95 < 100ms, p99 < 200ms
 - **Error Rate**: < 0.1%
 
+## 🏷️ Versioning
+
+This project uses **semantic versioning** via git tags. Version info is injected at compile time using Go `ldflags`.
+
+### Creating a Release
+
+```bash
+# Tag a release
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+This triggers the Release workflow which builds and pushes Docker images to GHCR.
+
+### Version Endpoint
+
+The running server exposes version info at `GET /version`:
+
+```json
+{
+  "version": "v1.0.0",
+  "commit": "abc1234",
+  "build_date": "2026-02-16T06:00:00Z"
+}
+```
+
+### Local Build with Version
+
+```bash
+make build
+# Output: Built v1.0.0 (abc1234) at 2026-02-16T06:00:00Z
+```
+
+## 🔄 CI/CD
+
+The project includes two GitHub Actions workflows:
+
+| Workflow | Trigger | Steps |
+|----------|---------|-------|
+| **CI** (`.github/workflows/ci.yml`) | Push to `main`, PRs | Lint → Test → Build |
+| **Release** (`.github/workflows/release.yml`) | Tag push `v*` | Test → Build multi-arch images → Push to GHCR |
+
+### Docker Images
+
+On each tagged release, multi-platform images (`linux/amd64`, `linux/arm64`) are published to GitHub Container Registry:
+
+```
+ghcr.io/<owner>/notification-api:v1.0.0
+ghcr.io/<owner>/notification-worker:v1.0.0
+```
+
 ## 🚀 Deployment
 
 ### Docker
 
-Build images:
+Build images locally with version info:
 
 ```bash
-docker build -t notification-api:latest -f docker/api.Dockerfile .
-docker build -t notification-worker:latest -f docker/worker.Dockerfile .
+make docker-build
 ```
 
 Run containers:
@@ -818,12 +682,16 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 
 ## 🗺️ Roadmap
 
+- [x] Message scheduling
+- [x] Bulk message sending
+- [x] Webhook status callbacks (Twilio & SendGrid)
+- [x] Prometheus metrics & observability
+- [x] Swagger / OpenAPI documentation
+- [x] Kubernetes deployment manifests
 - [ ] Message templates system
 - [ ] Multi-language support
 - [ ] A/B testing capability
 - [ ] Advanced analytics dashboard
-- [ ] Webhook retry mechanism
-- [ ] Message scheduling
 - [ ] Cost optimization engine
 - [ ] Multi-tenancy support
 

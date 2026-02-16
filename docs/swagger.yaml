@@ -1,0 +1,782 @@
+openapi: 3.0.3
+info:
+  title: Notification System API
+  description: |
+    Multi-channel notification delivery system supporting SMS, Email, WhatsApp, and Telegram.
+    
+    ## Authentication
+    All `/api/v1/*` endpoints require an **API key** passed via the `X-API-Key` header.
+    Unauthenticated routes include health checks, Prometheus metrics, and provider webhooks.
+    
+    ## Rate Limiting
+    Authenticated endpoints are rate-limited based on your account tier.
+  version: 1.0.0
+  contact:
+    name: Notification System Team
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Health
+    description: Service health and observability
+  - name: Messages
+    description: Notification message operations
+  - name: Webhooks
+    description: Provider status callback endpoints
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication
+
+  schemas:
+    # ── Request Schemas ─────────────────────────────────────────────
+
+    CreateMessageRequest:
+      type: object
+      required:
+        - subject
+        - message
+        - from
+        - to
+        - platform
+      properties:
+        subject:
+          type: string
+          maxLength: 200
+          example: "Order Confirmation"
+        message:
+          type: string
+          maxLength: 5000
+          example: "Your order #12345 has been confirmed."
+        from:
+          type: string
+          maxLength: 100
+          example: "noreply@example.com"
+        to:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          maxItems: 1000
+          example: ["user1@example.com", "user2@example.com"]
+        platform:
+          type: string
+          enum: [sms, whatsapp, telegram, email]
+          example: "email"
+        priority:
+          type: integer
+          enum: [0, 1, 2]
+          description: "0 = low, 1 = normal, 2 = high"
+          example: 1
+        scheduled_at:
+          type: string
+          format: date-time
+          description: "ISO 8601 timestamp. If set, the message is scheduled for future delivery."
+          example: "2026-03-01T10:00:00Z"
+
+    BulkMessageRequest:
+      type: object
+      required:
+        - messages
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateMessageRequest"
+          minItems: 1
+
+    # ── Response Schemas ────────────────────────────────────────────
+
+    SendMessageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message_id:
+          type: string
+          format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        recipients_count:
+          type: integer
+          example: 2
+        estimated_delivery:
+          type: string
+          format: date-time
+          example: "2026-02-16T06:00:00Z"
+        request_id:
+          type: string
+          example: "req_abc123"
+
+    MessageStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message_id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/MessageStatusDetail"
+
+    MessageStatusDetail:
+      type: object
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+          example: "Order Confirmation"
+        platform:
+          type: string
+          enum: [sms, whatsapp, telegram, email]
+        total_recipients:
+          type: integer
+          example: 2
+        summary:
+          $ref: "#/components/schemas/DeliverySummary"
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecipientStatus"
+        created_at:
+          type: string
+          format: date-time
+
+    DeliverySummary:
+      type: object
+      properties:
+        queued:
+          type: integer
+          example: 0
+        processing:
+          type: integer
+          example: 0
+        sent:
+          type: integer
+          example: 1
+        delivered:
+          type: integer
+          example: 1
+        failed:
+          type: integer
+          example: 0
+        pending:
+          type: integer
+          example: 0
+
+    RecipientStatus:
+      type: object
+      properties:
+        recipient:
+          type: string
+          example: "user@example.com"
+        status:
+          type: integer
+          description: "0=queued, 1=processing, 2=sent, 3=delivered, 4=failed, 5=pending, 6=cancelled, 7=scheduled"
+          example: 3
+        sent_at:
+          type: string
+          format: date-time
+          nullable: true
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ListMessagesResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+          example: "Order Confirmation"
+        body:
+          type: string
+          example: "Your order has been confirmed."
+        sender:
+          type: string
+          example: "noreply@example.com"
+        platform:
+          type: string
+          enum: [sms, whatsapp, telegram, email]
+        priority:
+          type: integer
+          enum: [0, 1, 2]
+        status:
+          type: integer
+          description: "0=queued, 1=processing, 2=sent, 3=delivered, 4=failed, 5=pending, 6=cancelled, 7=scheduled"
+        scheduled_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 42
+        total_pages:
+          type: integer
+          example: 3
+
+    BulkMessageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        total:
+          type: integer
+          example: 3
+        successful:
+          type: integer
+          example: 2
+        failed:
+          type: integer
+          example: 1
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/BulkMessageResult"
+
+    BulkMessageResult:
+      type: object
+      properties:
+        index:
+          type: integer
+          example: 0
+        success:
+          type: boolean
+          example: true
+        message_id:
+          type: string
+          format: uuid
+          description: "Present only when success is true."
+        error:
+          type: string
+          description: "Present only when success is false."
+
+    CancelMessageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: "cancelled"
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+
+    ErrorDetail:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "Invalid request body"
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+          description: "Per-field validation errors (optional)."
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+
+    VersionResponse:
+      type: object
+      properties:
+        version:
+          type: string
+          example: "v1.2.0"
+        commit:
+          type: string
+          example: "abc1234"
+        build_date:
+          type: string
+          example: "2026-02-16T06:00:00Z"
+
+# ═══════════════════════════════════════════════════════════════════
+#  Paths
+# ═══════════════════════════════════════════════════════════════════
+
+paths:
+  # ── Health & Observability ──────────────────────────────────────
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Returns the current health status of the API server.
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /version:
+    get:
+      tags: [Health]
+      summary: Build version info
+      description: Returns the build version, git commit, and build date of the running binary.
+      operationId: versionInfo
+      responses:
+        "200":
+          description: Version information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionResponse"
+
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Prometheus metrics
+      description: Exposes Prometheus-formatted metrics for monitoring.
+      operationId: prometheusMetrics
+      responses:
+        "200":
+          description: Prometheus metrics in text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # ── Messages ────────────────────────────────────────────────────
+
+  /api/v1/messages/send:
+    post:
+      tags: [Messages]
+      summary: Send a message
+      description: |
+        Send a notification message to one or more recipients via the specified platform.
+        If `scheduled_at` is provided, the message is scheduled for future delivery.
+      operationId: sendMessage
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMessageRequest"
+      responses:
+        "201":
+          description: Message accepted and queued for delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendMessageResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/messages/bulk:
+    post:
+      tags: [Messages]
+      summary: Bulk send messages
+      description: Send multiple notification messages in a single request. Each message is processed independently.
+      operationId: bulkSendMessages
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkMessageRequest"
+      responses:
+        "201":
+          description: Bulk operation completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkMessageResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/messages/{id}:
+    get:
+      tags: [Messages]
+      summary: Get message status
+      description: Retrieve the delivery status of a message including per-recipient breakdown.
+      operationId: getMessageStatus
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Message UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Message status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageStatusResponse"
+        "400":
+          description: Invalid message ID format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Message not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags: [Messages]
+      summary: Cancel a scheduled message
+      description: |
+        Cancel a message that is currently in `scheduled` status.
+        Messages that have already been queued or sent cannot be cancelled.
+      operationId: cancelMessage
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Message UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Message cancelled successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelMessageResponse"
+        "400":
+          description: Invalid message ID format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Message not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Message is not in a cancellable state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/messages:
+    get:
+      tags: [Messages]
+      summary: List messages
+      description: Retrieve a paginated list of messages belonging to the authenticated user, with optional filtering.
+      operationId: listMessages
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: page
+          in: query
+          description: Page number (default 1)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page (default 20, max 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: platform
+          in: query
+          description: Filter by platform
+          schema:
+            type: string
+            enum: [sms, whatsapp, telegram, email]
+        - name: status
+          in: query
+          description: "Filter by status code (0=queued, 1=processing, 2=sent, 3=delivered, 4=failed, 5=pending, 6=cancelled, 7=scheduled)"
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 7
+        - name: from
+          in: query
+          description: Filter messages created after this timestamp (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Filter messages created before this timestamp (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Paginated list of messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListMessagesResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ── Webhooks ────────────────────────────────────────────────────
+
+  /webhooks/twilio:
+    post:
+      tags: [Webhooks]
+      summary: Twilio status callback
+      description: |
+        Receives delivery status updates from Twilio.
+        Twilio sends form-encoded POST requests with `MessageSid` and `MessageStatus` fields.
+        
+        **This endpoint is called by Twilio, not by API consumers.**
+      operationId: twilioWebhook
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - MessageSid
+                - MessageStatus
+              properties:
+                MessageSid:
+                  type: string
+                  description: Twilio message SID
+                  example: "SM1234567890abcdef1234567890abcdef"
+                MessageStatus:
+                  type: string
+                  description: Twilio delivery status
+                  enum: [sent, delivered, undelivered, failed]
+                  example: "delivered"
+      responses:
+        "200":
+          description: Webhook processed successfully
+        "400":
+          description: Missing required fields
+        "500":
+          description: Internal server error
+
+  /webhooks/sendgrid:
+    post:
+      tags: [Webhooks]
+      summary: SendGrid event webhook
+      description: |
+        Receives delivery event notifications from SendGrid.
+        SendGrid sends a JSON array of event objects.
+        
+        **This endpoint is called by SendGrid, not by API consumers.**
+      operationId: sendGridWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+                properties:
+                  sg_message_id:
+                    type: string
+                    description: SendGrid message ID
+                    example: "abc123def456.filter0001"
+                  event:
+                    type: string
+                    description: Event type
+                    enum: [delivered, bounce, dropped, open, click]
+                    example: "delivered"
+                  email:
+                    type: string
+                    format: email
+                    example: "user@example.com"
+                  timestamp:
+                    type: integer
+                    description: Unix timestamp of the event
+                    example: 1739680800
+                  reason:
+                    type: string
+                    description: Reason for bounce/drop (optional)
+      responses:
+        "200":
+          description: Events processed successfully
+        "400":
+          description: Invalid JSON payload
